@@ -9,6 +9,16 @@
     "wsservice" : "moodle_mobile_app",
     "wsextservice" : "local_mobile",
     "presets" : {"url": "http://learning.trinityhigh.com", "username": ""},
+    "sync_ws_on" : true,
+    "sync_css_on" : true,
+    "sync_cron": 300000,
+    "sync_ws" : 300000,
+    "sync_css" : 3600000,
+    "event_notif_on": true,
+    "log_length" : 100,
+    "dev_debug": true,
+    "extra_js": [],
+    "notifications_enabled": true,
     "gcmpn": "694767596569",
     "customurlscheme": "moodlemobile"
 }
