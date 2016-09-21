@@ -23,12 +23,12 @@ angular.module('mm.addons.mod_wiki')
  */
 .controller('mmaModWikiIndexCtrl', function($q, $scope, $stateParams, $mmCourse, $mmUser, $mmGroups, $ionicPopover, $mmUtil, $state,
         $mmSite, $mmaModWiki, $ionicTabsDelegate, $ionicHistory, $translate, mmaModWikiSubwikiPagesLoaded, $mmCourseHelper,
-        $mmCoursePrefetchDelegate, $mmText, mmaModWikiComponent, $mmEvents, mmCoreEventPackageStatusChanged) {
+        $mmCoursePrefetchDelegate, $mmText, mmaModWikiComponent, $mmEvents, mmCoreEventPackageStatusChanged, $ionicScrollDelegate) {
     var module = $stateParams.module || {},
         courseId = $stateParams.courseid,
         action = $stateParams.action || 'page',
         currentPage = $stateParams.pageid || false,
-        popover, wiki, currentSubwiki, loadedSubwikis, tabsDelegate, statusObserver;
+        popover, wiki, currentSubwiki, loadedSubwikis, tabsDelegate, statusObserver, currentPageObj;
 
     $scope.title = $stateParams.pagetitle || module.name;
     $scope.description = module.description;
@@ -36,11 +36,13 @@ angular.module('mm.addons.mod_wiki')
     $scope.moduleUrl = module.url;
     $scope.courseId = courseId;
     $scope.component = mmaModWikiComponent;
+    $scope.canEdit = false;
     $scope.subwikiData = {
         selected: 0,
         subwikis: [],
         count: 0
     };
+    $scope.refreshIcon = 'spinner';
 
     $scope.tabsDelegateName = 'mmaModWikiTabs_'+(module.id || 0) + '_' + (currentPage || 0) + '_' +  new Date().getTime();
     tabsDelegate = $ionicTabsDelegate.$getByHandle($scope.tabsDelegateName);
@@ -75,6 +77,34 @@ angular.module('mm.addons.mod_wiki')
 
         // No changes done.
         tabsDelegate.select(0);
+    };
+
+    $scope.gotoEditPage = function() {
+        if (currentPageObj && $scope.canEdit) {
+            var stateParams = {
+                module: module,
+                moduleid: module.id,
+                courseid: courseId,
+                pageid: currentPageObj.id,
+                pagetitle: currentPageObj.title,
+                subwikiid: currentPageObj.subwikiid
+            };
+
+            return $state.go('site.mod_wiki-edit', stateParams);
+        }
+    };
+
+    $scope.gotoNewPage = function() {
+        if (currentPageObj && $scope.canEdit) {
+            var stateParams = {
+                module: module,
+                moduleid: module.id,
+                courseid: courseId,
+                subwikiid: currentPageObj.subwikiid
+            };
+
+            return $state.go('site.mod_wiki-edit', stateParams);
+        }
     };
 
     $scope.gotoSubwiki = function(subwikiId) {
@@ -209,7 +239,7 @@ angular.module('mm.addons.mod_wiki')
 
     // Context Menu Description action.
     $scope.expandDescription = function() {
-        $mmText.expandText($translate.instant('mm.core.description'), $scope.description);
+        $mmText.expandText($translate.instant('mm.core.description'), $scope.description, false, mmaModWikiComponent, module.id);
     };
 
     // Context Menu File size action.
@@ -469,11 +499,24 @@ angular.module('mm.addons.mod_wiki')
             return fetchPageContents(currentPage).then(function(pageContents) {
                 $scope.title = pageContents.title;
                 $scope.subwikiData.selected = pageContents.subwikiid;
-                $scope.pageContent = pageContents.cachedcontent;
+                $scope.pageContent = replaceEditLinks(pageContents.cachedcontent);
+                $scope.canEdit = pageContents.caneditpage && $mmaModWiki.isPluginEnabledForEditing();
+                currentPageObj = pageContents;
             });
         }).finally(function() {
             $scope.wikiLoaded = true;
+            $scope.refreshIcon = 'ion-refresh';
         });
+    }
+
+    // Replace edit links to have full url.
+    function replaceEditLinks(content) {
+        content = content.trim();
+        if (content.length > 0) {
+            var url = $mmSite.getURL();
+            content = content.replace(/href="edit\.php/g, 'href="'+url+'/mod/wiki/edit.php');
+        }
+        return content;
     }
 
     // Convenience function to get wiki subwikiPages.
@@ -534,14 +577,40 @@ angular.module('mm.addons.mod_wiki')
         }
     }).finally(function() {
         $scope.wikiLoaded = true;
+        $scope.refreshIcon = 'ion-refresh';
     });
 
     // Pull to refresh.
     $scope.refreshWiki = function() {
-        refreshAllData().finally(function() {
-            $scope.$broadcast('scroll.refreshComplete');
-        });
+        if ($scope.wikiLoaded) {
+            $scope.refreshIcon = 'spinner';
+            return refreshAllData().finally(function() {
+                $scope.refreshIcon = 'ion-refresh';
+                $scope.$broadcast('scroll.refreshComplete');
+            });
+        }
     };
+
+    // Update data when we come back from the view since it's probable that it has changed.
+    // We want to skip the first $ionicView.enter event because it's when the view is created.
+    var skip = true;
+    $scope.$on('$ionicView.enter', function() {
+        if (skip) {
+            skip = false;
+            return;
+        }
+
+        var forwardView = $ionicHistory.forwardView();
+        if (forwardView && forwardView.stateName === 'site.mod_wiki-edit') {
+            $scope.wikiLoaded = false;
+            $scope.refreshIcon = 'spinner';
+            $ionicScrollDelegate.$getByHandle('mmaModWikiIndexScroll').scrollTop();
+            fetchWikiData().finally(function() {
+                $scope.wikiLoaded = true;
+                $scope.refreshIcon = 'ion-refresh';
+            });
+        }
+    });
 
     $scope.$on('$destroy', function() {
         statusObserver && statusObserver.off && statusObserver.off();

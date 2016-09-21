@@ -21,7 +21,7 @@ angular.module('mm.addons.mod_resource')
  * @ngdoc service
  * @name $mmaModResourcePrefetchHandler
  */
-.factory('$mmaModResourcePrefetchHandler', function($mmaModResource, $mmSite, mmaModResourceComponent) {
+.factory('$mmaModResourcePrefetchHandler', function($mmaModResource, $mmSite, $mmFilepool, mmaModResourceComponent) {
 
     var self = {};
 
@@ -33,8 +33,8 @@ angular.module('mm.addons.mod_resource')
      * @module mm.addons.mod_resource
      * @ngdoc method
      * @name $mmaModResourcePrefetchHandler#getDownloadSize
-     * @param {Object} module Module to get the size.
-     * @return {Number}       Size.
+     * @param  {Object} module Module to get the size.
+     * @return {Object}        With the file size and a boolean to indicate if it is the total size or only partial.
      */
     self.getDownloadSize = function(module) {
         var size = 0;
@@ -43,7 +43,21 @@ angular.module('mm.addons.mod_resource')
                 size = size + content.filesize;
             }
         });
-        return size;
+        return {size: size, total: true};
+    };
+
+    /**
+     * Get the downloaded size of a module.
+     *
+     * @module mm.addons.mod_resource
+     * @ngdoc method
+     * @name $mmaModResourcePrefetchHandler#getDownloadedSize
+     * @param {Object} module   Module to get the downloaded size.
+     * @param {Number} courseId Course ID the module belongs to.
+     * @return {Promise}        Promise resolved with the size.
+     */
+    self.getDownloadedSize = function(module, courseId) {
+        return $mmFilepool.getFilesSizeByComponent($mmSite.getId(), self.component, module.id);
     };
 
     /**
@@ -71,6 +85,20 @@ angular.module('mm.addons.mod_resource')
      */
     self.prefetch = function(module, courseId, single) {
         return $mmaModResource.prefetchContent(module);
+    };
+
+    /**
+     * Remove module downloaded files.
+     *
+     * @module mm.addons.mod_resource
+     * @ngdoc method
+     * @name $mmaModResourcePrefetchHandler#removeFiles
+     * @param {Object} module   Module to remove the files.
+     * @param {Number} courseId Course ID the module belongs to.
+     * @return {Promise}        Promise resolved when done.
+     */
+    self.removeFiles = function(module, courseId) {
+        return $mmFilepool.removeFilesByComponent($mmSite.getId(), self.component, module.id);
     };
 
     return self;

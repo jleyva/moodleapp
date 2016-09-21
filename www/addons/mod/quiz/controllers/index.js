@@ -44,8 +44,12 @@ angular.module('mm.addons.mod_quiz')
     $scope.title = module.name;
     $scope.description = module.description;
     $scope.moduleUrl = module.url;
+    $scope.moduleName = $mmCourse.translateModuleName('quiz');
     $scope.isTablet = $ionicPlatform.isTablet();
     $scope.courseId = courseId;
+    $scope.refreshIcon = 'spinner';
+    $scope.component = mmaModQuizComponent;
+    $scope.componentId = module.id;
 
     // Convenience function to get Quiz data.
     function fetchQuizData(refresh) {
@@ -58,11 +62,11 @@ angular.module('mm.addons.mod_quiz')
             $scope.description = quiz.intro || $scope.description;
 
             // Try to get warnings from automatic sync.
-            return $mmaModQuizSync.getQuizSyncWarnings(quiz.id).then(function(warnings) {
+            return $mmaModQuizSync.getSyncWarnings(quiz.id).then(function(warnings) {
                 if (warnings && warnings.length) {
                     // Show warnings and delete them so they aren't shown again.
                     $mmUtil.showErrorModal($mmText.buildMessage(warnings));
-                    return $mmaModQuizSync.setQuizSyncWarnings(quiz.id, []);
+                    return $mmaModQuizSync.setSyncWarnings(quiz.id, []);
                 }
             });
         }).then(function() {
@@ -181,11 +185,16 @@ angular.module('mm.addons.mod_quiz')
         // Get best grade.
         promises.push($mmaModQuiz.getUserBestGrade(quiz.id).then(function(best) {
             bestGrade = best;
-        }));
 
-        // Get gradebook grade.
-        promises.push($mmaModQuiz.getGradeFromGradebook(courseId, module.id).then(function(data) {
-            gradebookData = data;
+            // Get gradebook grade.
+            return $mmaModQuiz.getGradeFromGradebook(courseId, module.id).then(function(data) {
+                gradebookData = data;
+            }).catch(function() {
+                // Fallback to quiz best grade if failure or not found.
+                gradebookData = {
+                    grade: bestGrade.grade
+                };
+            });
         }));
 
         return $q.all(promises).then(function() {
@@ -402,13 +411,18 @@ angular.module('mm.addons.mod_quiz')
         });
     }).finally(function() {
         $scope.quizLoaded = true;
+        $scope.refreshIcon = 'ion-refresh';
     });
 
     // Pull to refresh.
     $scope.refreshQuiz = function() {
-        refreshData().finally(function() {
-            $scope.$broadcast('scroll.refreshComplete');
-        });
+        if ($scope.quizLoaded) {
+            $scope.refreshIcon = 'spinner';
+            return refreshData().finally(function() {
+                $scope.refreshIcon = 'ion-refresh';
+                $scope.$broadcast('scroll.refreshComplete');
+            });
+        }
     };
 
     // Synchronize the quiz.
@@ -422,9 +436,11 @@ angular.module('mm.addons.mod_quiz')
         syncQuiz(true).then(function() {
             // Refresh the data.
             $scope.quizLoaded = false;
+            $scope.refreshIcon = 'spinner';
             scrollView.scrollTop();
             refreshData(true).finally(function() {
                 $scope.quizLoaded = true;
+                $scope.refreshIcon = 'ion-refresh';
             });
         }).finally(function() {
             $scope.showSpinner = false;
@@ -462,7 +478,7 @@ angular.module('mm.addons.mod_quiz')
 
     // Context Menu Description action.
     $scope.expandDescription = function() {
-        $mmText.expandText($translate.instant('mm.core.description'), $scope.description);
+        $mmText.expandText($translate.instant('mm.core.description'), $scope.description, false, mmaModQuizComponent, module.id);
     };
 
 
@@ -487,10 +503,12 @@ angular.module('mm.addons.mod_quiz')
 
             // Refresh data.
             $scope.quizLoaded = false;
+            $scope.refreshIcon = 'spinner';
             scrollView.scrollTop();
             promise.then(function() {
                 refreshData().finally(function() {
                     $scope.quizLoaded = true;
+                    $scope.refreshIcon = 'ion-refresh';
                 });
             });
         } else {
@@ -514,9 +532,11 @@ angular.module('mm.addons.mod_quiz')
     var syncObserver = $mmEvents.on(mmaModQuizEventAutomSynced, function(data) {
         if (data && data.siteid == $mmSite.getId() && data.quizid == quiz.id) {
             $scope.quizLoaded = false;
+            $scope.refreshIcon = 'spinner';
             scrollView.scrollTop();
             fetchQuizData().finally(function() {
                 $scope.quizLoaded = true;
+                $scope.refreshIcon = 'ion-refresh';
             });
 
             if (data.attemptFinished) {

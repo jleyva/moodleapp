@@ -66,7 +66,8 @@ angular.module('mm.core')
     };
 
     this.$get = function($ionicLoading, $ionicPopup, $injector, $translate, $http, $log, $q, $mmLang, $mmFS, $timeout, $mmApp,
-                $mmText, mmCoreWifiDownloadThreshold, mmCoreDownloadThreshold, $ionicScrollDelegate, $mmWS, $cordovaInAppBrowser) {
+                $mmText, mmCoreWifiDownloadThreshold, mmCoreDownloadThreshold, $ionicScrollDelegate, $mmWS, $cordovaInAppBrowser,
+                $mmConfig, mmCoreSettingsRichTextEditor) {
 
         $log = $log.getInstance('$mmUtil');
 
@@ -445,7 +446,7 @@ angular.module('mm.core')
                 $mmWS.getRemoteFileMimeType(url).then(function(mimetype) {
                     if (!mimetype) {
                         // Couldn't retireve mimetype. Try to guess it.
-                        extension = $mmText.guessExtensionFromUrl(url);
+                        extension = $mmFS.guessExtensionFromUrl(url);
                         mimetype = $mmFS.getMimeType(extension);
                     }
 
@@ -499,7 +500,7 @@ angular.module('mm.core')
             return $mmWS.getRemoteFileMimeType(url).then(function(mimetype) {
                 if (!mimetype) {
                     // Couldn't retireve mimetype. Try to guess it.
-                    extension = $mmText.guessExtensionFromUrl(url);
+                    extension = $mmFS.guessExtensionFromUrl(url);
                     mimetype = $mmFS.getMimeType(extension);
                 }
                 return mimetype || '';
@@ -893,6 +894,48 @@ angular.module('mm.core')
         };
 
         /**
+         * Returns hours, minutes and seconds in a human readable format
+         *
+         * @module mm.core
+         * @ngdoc method
+         * @name $mmUtil#formatDuration
+         * @param  {Integer} duration       Duration in seconds
+         * @param  {Integer} [precission]   Number of elements to have in precission. 0 or undefined to full precission.
+         * @return {String}                 Full Human readable duration formatted
+         */
+        self.formatDuration = function(duration, precission) {
+            eventDuration = moment.duration(duration, 'seconds');
+
+            if (!precission) {
+                precission = 5;
+            }
+
+            durationString = "";
+            if (precission && eventDuration.years() > 0) {
+                durationString += " " + moment.duration(eventDuration.years(), 'years').humanize();
+                precission--;
+            }
+            if (precission && eventDuration.months() > 0) {
+                durationString += " " + moment.duration(eventDuration.months(), 'months').humanize();
+                precission--;
+            }
+            if (precission && eventDuration.days() > 0) {
+                durationString += " " + moment.duration(eventDuration.days(), 'days').humanize();
+                precission--;
+            }
+            if (precission && eventDuration.hours() > 0) {
+                durationString += " " + moment.duration(eventDuration.hours(), 'hours').humanize();
+                precission--;
+            }
+            if (precission && eventDuration.minutes() > 0) {
+                durationString += " " + moment.duration(eventDuration.minutes(), 'minutes').humanize();
+                precission--;
+            }
+
+            return durationString.trim();
+        };
+
+        /**
          * Empties an array without losing its reference.
          *
          * @module mm.core
@@ -1008,7 +1051,8 @@ angular.module('mm.core')
          * @module mm.core
          * @ngdoc method
          * @name $mmUtil#confirmDownloadSize
-         * @param {Number} size                 Size to download (in bytes).
+         * @param {Object|Number} sizeCalc      Containing size to download (in bytes) and a boolean to indicate if its
+         *                                      totaly or partialy calculated.
          * @param {String} [message]            Code of the message to show. Default: 'mm.course.confirmdownload'.
          * @param {String} [unknownsizemessage] Code of the message to show if size is unknown.
          *                                      Default: 'mm.course.confirmdownloadunknownsize'.
@@ -1016,21 +1060,56 @@ angular.module('mm.core')
          * @param {Number} [limitedThreshold]   Threshold to show confirm in limited connection. Default: mmCoreDownloadThreshold.
          * @return {Promise}                   Promise resolved when the user confirms or if no confirm needed.
          */
-        self.confirmDownloadSize = function(size, message, unknownsizemessage, wifiThreshold, limitedThreshold) {
+        self.confirmDownloadSize = function(sizeCalc, message, unknownsizemessage, wifiThreshold, limitedThreshold) {
             wifiThreshold = typeof wifiThreshold == 'undefined' ? mmCoreWifiDownloadThreshold : wifiThreshold;
             limitedThreshold = typeof limitedThreshold == 'undefined' ? mmCoreDownloadThreshold : limitedThreshold;
-            message = message || 'mm.course.confirmdownload';
-            unknownsizemessage = unknownsizemessage || 'mm.course.confirmdownloadunknownsize';
 
-            if (size <= 0) {
-                // Seems size was unable to be calculated. Show a warning.
-                return self.showConfirm($translate(unknownsizemessage));
+            // Backward compatibility conversion.
+            if (typeof sizeCalc == 'number') {
+                sizeCalc = {size: sizeCalc, total: false};
             }
-            else if (size >= wifiThreshold || ($mmApp.isNetworkAccessLimited() && size >= limitedThreshold)) {
-                var readableSize = $mmText.bytesToSize(size, 2);
+
+            if (sizeCalc.size < 0 || (sizeCalc.size == 0 && !sizeCalc.total)) {
+                // Seems size was unable to be calculated. Show a warning.
+                unknownsizemessage = unknownsizemessage || 'mm.course.confirmdownloadunknownsize';
+                return self.showConfirm($translate(unknownsizemessage));
+            } else if (!sizeCalc.total) {
+                // Filesize is only partial.
+                var readableSize = $mmText.bytesToSize(sizeCalc.size, 2);
+                return self.showConfirm($translate('mm.course.confirmpartialdownloadsize', {size: readableSize}));
+            } else if (sizeCalc.size >= wifiThreshold || ($mmApp.isNetworkAccessLimited() && sizeCalc.size >= limitedThreshold)) {
+                message = message || 'mm.course.confirmdownload';
+                var readableSize = $mmText.bytesToSize(sizeCalc.size, 2);
                 return self.showConfirm($translate(message, {size: readableSize}));
             }
             return $q.when();
+        };
+
+        /**
+         * Sum the filesizes from a list of files checking if the size will be partial or totally calculated.
+         *
+         * @module mm.core
+         * @ngdoc method
+         * @name $mmUtil#sumFileSizes
+         * @param  {Array} files  List of files to sum its filesize.
+         * @return {Object}       With the file size and a boolean to indicate if it is the total size or only partial.
+         */
+        self.sumFileSizes = function(files) {
+            var results = {
+                size: 0,
+                total: true
+            };
+
+            angular.forEach(files, function(file) {
+                if (typeof file.filesize == 'undefined') {
+                    // We don't have the file size, cannot calculate its total size.
+                    results.total = false;
+                } else {
+                    results.size += file.filesize;
+                }
+            });
+
+            return results;
         };
 
         /**
@@ -1413,12 +1492,31 @@ angular.module('mm.core')
 
             angular.forEach(elements, function(element) {
                 var url = element.tagName === 'A' ? element.href : element.src;
-                if (url && self.isDownloadableUrl(url)) {
+                if (url && self.isDownloadableUrl(url) && urls.indexOf(url) == -1) {
                     urls.push(url);
                 }
             });
 
             return urls;
+        };
+
+        /**
+         * Extract the downloadable URLs from an HTML and returns them in fake file objects.
+         *
+         * @module mm.core
+         * @ngdoc method
+         * @name $mmUtil#extractDownloadableFilesFromHtmlAsFakeFileObjects
+         * @param  {String} html HTML code.
+         * @return {Object[]}    List of fake file objects with file URLs.
+         */
+        self.extractDownloadableFilesFromHtmlAsFakeFileObjects = function(html) {
+            var urls = self.extractDownloadableFilesFromHtml(html);
+            // Convert them to fake file objects.
+            return urls.map(function(url) {
+                return {
+                    fileurl: url
+                };
+            });
         };
 
         /**
@@ -1568,6 +1666,73 @@ angular.module('mm.core')
         self.supportsInputKeyboard = function(el) {
             return el && !el.disabled && (el.tagName.toLowerCase() == 'textarea' ||
                 (el.tagName.toLowerCase() == 'input' && inputSupportKeyboard.indexOf(el.type) != -1));
+        };
+
+        /**
+         * Check if rich text editor is supported in the platform.
+         *
+         * @module mm.core
+         * @ngdoc method
+         * @name $mmUtil#isRichTextEditorSupported
+         * @return {Boolean} True if supported, false otherwise.
+         */
+        self.isRichTextEditorSupported = function() {
+            // Enabled for all platforms different from iOS and Android.
+            if (!ionic.Platform.isIOS() && !ionic.Platform.isAndroid()) {
+                return true;
+            }
+
+            // Check Android version >= 4.4
+            if (ionic.Platform.isAndroid() && ionic.Platform.version() >= 4.4) {
+                return true;
+            }
+
+            return false;
+        };
+
+        /**
+         * Check if rich text editor is enabled.
+         *
+         * @module mm.core
+         * @ngdoc method
+         * @name $mmUtil#isRichTextEditorEnabled
+         * @return {Promise} Promise resolved with boolean: true if enabled, false otherwise.
+         */
+        self.isRichTextEditorEnabled = function() {
+            if (self.isRichTextEditorSupported()) {
+                return $mmConfig.get(mmCoreSettingsRichTextEditor, true);
+            }
+
+            return $q.when(false);
+        };
+
+        /**
+         * Given a list of files, check if there are repeated names.
+         *
+         * @module mm.core
+         * @ngdoc method
+         * @name $mmUtil#hasRepeatedFilenames
+         * @param  {Object[]} files List of files.
+         * @return {Mixed}          String with error message if repeated, false if no repeated.
+         */
+        self.hasRepeatedFilenames = function(files) {
+            if (!files || !files.length) {
+                return false;
+            }
+
+            var names = [];
+
+            // Check if there are 2 files with the same name.
+            for (var i = 0; i < files.length; i++) {
+                var name = files[i].filename || files[i].name;
+                if (names.indexOf(name) > -1) {
+                    return $translate.instant('mm.core.filenameexist', {$a: name});
+                } else {
+                    names.push(name);
+                }
+            }
+
+            return false;
         };
 
         return self;

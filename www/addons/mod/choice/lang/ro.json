@@ -10,6 +10,7 @@
     "removemychoice": "Șterge alegerea mea",
     "responses": "Răspunsuri",
     "responsesresultgraphdescription": "{{number}}% dintre utilizatori au ales varianta: {{text}}.",
+    "responsesresultgraphheader": "Afișează graficul",
     "savemychoice": "Salvează formularul meu de evaluare",
     "yourselection": "Selecția ta"
 }

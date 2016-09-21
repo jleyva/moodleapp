@@ -22,7 +22,7 @@ angular.module('mm.addons.mod_book')
  * @name mmaModBookIndexCtrl
  */
 .controller('mmaModBookIndexCtrl', function($scope, $stateParams, $mmUtil, $mmaModBook, $log, mmaModBookComponent, $mmText,
-            $ionicPopover, $mmApp, $q, $mmCourse, $ionicScrollDelegate, $translate) {
+            $ionicPopover, $mmApp, $q, $mmCourse, $ionicScrollDelegate, $translate, $timeout) {
     $log = $log.getInstance('mmaModBookIndexCtrl');
 
     var module = $stateParams.module || {},
@@ -36,6 +36,7 @@ angular.module('mm.addons.mod_book')
     $scope.componentId = module.id;
     $scope.externalUrl = module.url;
     $scope.loaded = false;
+    $scope.refreshIcon = 'spinner';
 
     var chapters = $mmaModBook.getTocList(module.contents);
     currentChapter = $mmaModBook.getFirstChapter(chapters);
@@ -61,6 +62,7 @@ angular.module('mm.addons.mod_book')
             return $q.reject();
         }).finally(function() {
             $scope.loaded = true;
+            $scope.refreshIcon = 'ion-refresh';
             $ionicScrollDelegate.resize(); // Call resize to recalculate scroll area.
         });
     }
@@ -83,31 +85,42 @@ angular.module('mm.addons.mod_book')
     }
 
     $scope.doRefresh = function() {
-        $mmaModBook.invalidateContent(module.id).then(function() {
-            return fetchContent(currentChapter);
-        }).finally(function() {
-            $scope.$broadcast('scroll.refreshComplete');
-        });
+        if ($scope.loaded) {
+            $scope.refreshIcon = 'spinner';
+            return $mmaModBook.invalidateContent(module.id).then(function() {
+                return fetchContent(currentChapter);
+            }).finally(function() {
+                $scope.refreshIcon = 'ion-refresh';
+                $scope.$broadcast('scroll.refreshComplete');
+            });
+        }
     };
 
     // Function to load a chapter.
     $scope.loadChapter = function(chapterId) {
         $scope.popover.hide();
         $scope.loaded = false;
+        $scope.refreshIcon = 'spinner';
         loadChapter(chapterId);
     };
 
     // Menu popover.
     $scope.toc = chapters;
-    $ionicPopover.fromTemplateUrl('addons/mod/book/templates/toc.html', {
-        scope: $scope,
-    }).then(function(popover) {
-        $scope.popover = popover;
+    $timeout(function() {
+        $ionicPopover.fromTemplateUrl('addons/mod/book/templates/toc.html', {
+            scope: $scope
+        }).then(function(popover) {
+            $scope.popover = popover;
+
+            $scope.openToc = function($event) {
+                popover.show($event);
+            };
+        });
     });
 
     // Context Menu Description action.
     $scope.expandDescription = function() {
-        $mmText.expandText($translate.instant('mm.core.description'), $scope.description);
+        $mmText.expandText($translate.instant('mm.core.description'), $scope.description, false, mmaModBookComponent, module.id);
     };
 
 

@@ -33,7 +33,8 @@ angular.module('mm.core')
         basePath = '',
         isHTMLAPI = false,
         extToMime = {},
-        mimeToExt = {};
+        mimeToExt = {},
+        extensionRegex = new RegExp('^[a-z0-9]+$');
 
     // Loading extensions to mimetypes file.
     $http.get('core/assets/mimetypes.json').then(function(response) {
@@ -139,7 +140,7 @@ angular.module('mm.core')
         // Paths cannot start with "/".
         path = self.removeStartingSlash(path);
         return self.init().then(function() {
-            $log.debug('Get file: '+path);
+            $log.debug('Get file: ' + path);
             return $cordovaFile.checkFile(basePath, path);
         });
     };
@@ -898,7 +899,7 @@ angular.module('mm.core')
      *
      * @module mm.core
      * @ngdoc method
-     * @name $mmUtil#getFileExtension
+     * @name $mmFS#getFileExtension
      * @param  {string} filename The file name.
      * @return {string}          The lowercased extension, or undefined.
      */
@@ -908,6 +909,11 @@ angular.module('mm.core')
 
         if (dot > -1) {
             ext = filename.substr(dot + 1).toLowerCase();
+            // Check extension corresponds to a mimetype to know if it's valid.
+            if (typeof self.getMimeType(ext) == 'undefined') {
+                $log.debug('Get file extension: Not valid extension ' + ext);
+                return;
+            }
         }
 
         return ext;
@@ -929,6 +935,45 @@ angular.module('mm.core')
     };
 
     /**
+     * Guess the extension of a file from its URL.
+     *
+     * This is very weak and unreliable.
+     *
+     * @module mm.core
+     * @ngdoc method
+     * @name $mmFS#guessExtensionFromUrl
+     * @param {String} fileUrl The file URL.
+     * @return {String}        The lowercased extension without the dot, or undefined.
+     */
+    self.guessExtensionFromUrl = function(fileUrl) {
+        var split = fileUrl.split('.'),
+            candidate,
+            extension,
+            position;
+
+        if (split.length > 1) {
+            candidate = split.pop().toLowerCase();
+            // Remove params if any.
+            position = candidate.indexOf('?');
+            if (position > -1) {
+                candidate = candidate.substr(0, position);
+            }
+
+            if (extensionRegex.test(candidate)) {
+                extension = candidate;
+            }
+        }
+
+        // Check extension corresponds to a mimetype to know if it's valid.
+        if (extension && typeof self.getMimeType(extension) == 'undefined') {
+            $log.debug('Guess file extension: Not valid extension ' + extension);
+            return;
+        }
+
+        return extension;
+    };
+
+    /**
      * Get the extension of a mimetype. Returns undefined if not found.
      *
      * @module mm.core
@@ -939,11 +984,16 @@ angular.module('mm.core')
      * @return {String}           Extension.
      */
     self.getExtension = function(mimetype, url) {
+        if (mimetype == 'application/x-forcedownload' || mimetype == 'application/forcedownload') {
+            // Couldn't get the right mimetype (old Moodle), try to guess it.
+            return self.guessExtensionFromUrl(url);
+        }
+
         var extensions = mimeToExt[mimetype];
         if (extensions && extensions.length) {
             if (extensions.length > 1 && url) {
                 // There's more than one possible extension. Check if the URL has extension.
-                var candidate = $mmText.guessExtensionFromUrl(url);
+                var candidate = self.guessExtensionFromUrl(url);
                 if (extensions.indexOf(candidate) != -1) {
                     return candidate;
                 }
@@ -963,9 +1013,15 @@ angular.module('mm.core')
      * @return {String}      Path without extension.
      */
     self.removeExtension = function(path) {
-        var index = path.lastIndexOf('.');
-        if (index > -1) {
-            return path.substr(0, index); // Remove extension.
+        var extension,
+            position = path.lastIndexOf('.');
+        if (position > -1) {
+
+            // Check extension corresponds to a mimetype to know if it's valid.
+            extension = path.substr(position + 1);
+            if (typeof self.getMimeType(extension) != 'undefined') {
+                return path.substr(0, position); // Remove extension.
+            }
         }
         return path;
     };
@@ -984,6 +1040,23 @@ angular.module('mm.core')
             return path;
         } else {
             return self.concatenatePaths(basePath, path);
+        }
+    };
+
+    /**
+     * Remove the base path from a path. If basePath isn't found, return false.
+     *
+     * @module mm.core
+     * @ngdoc method
+     * @name $mmFS#removeBasePath
+     * @param {String} path Path to treat.
+     * @return {Mixed}     Path without basePath if basePath was found, false otherwise.
+     */
+    self.removeBasePath = function(path) {
+        if (path.indexOf(basePath) > -1) {
+            return path.replace(basePath, '');
+        } else {
+            return false;
         }
     };
 
@@ -1087,6 +1160,127 @@ angular.module('mm.core')
             return path.substr(1);
         }
         return path;
+    };
+
+    /**
+     * Convenience function to copy or move an external file.
+     *
+     * @param  {String} from  Absolute path to the file to copy/move.
+     * @param  {String} to    Relative new path of the file (inside the app folder).
+     * @param  {Boolean} copy True to copy, false to move.
+     * @return {Promise}      Promise resolved when the entry is copied/moved.
+     */
+    function copyOrMoveExternalFile(from, to, copy) {
+        // Get the file to copy/move.
+        return self.getExternalFile(from).then(function(fileEntry) {
+            // Create the destination dir if it doesn't exist.
+            var dirAndFile = self.getFileAndDirectoryFromPath(to);
+            return self.createDir(dirAndFile.directory).then(function(dirEntry) {
+                // Now copy/move the file.
+                var deferred = $q.defer();
+                if (copy) {
+                    fileEntry.copyTo(dirEntry, dirAndFile.name, deferred.resolve, deferred.reject);
+                } else {
+                    fileEntry.moveTo(dirEntry, dirAndFile.name, deferred.resolve, deferred.reject);
+                }
+                return deferred.promise;
+            });
+        });
+    }
+
+    /**
+     * Copy a file from outside of the app folder to somewhere inside the app folder.
+     *
+     * @module mm.core
+     * @ngdoc method
+     * @name $mmFS#copyExternalFile
+     * @param {String} from Absolute path to the file to copy.
+     * @param {String} to   Relative new path of the file (inside the app folder).
+     * @return {Promise}    Promise resolved when the entry is copied.
+     */
+    self.copyExternalFile = function(from, to) {
+        return copyOrMoveExternalFile(from, to, true);
+    };
+
+    /**
+     * Move a file from outside of the app folder to somewhere inside the app folder.
+     *
+     * @module mm.core
+     * @ngdoc method
+     * @name $mmFS#moveExternalFile
+     * @param {String} from Absolute path to the file to move.
+     * @param {String} to   Relative new path of the file (inside the app folder).
+     * @return {Promise}    Promise resolved when the entry is moved.
+     */
+    self.moveExternalFile = function(from, to) {
+        return copyOrMoveExternalFile(from, to, false);
+    };
+
+    /**
+     * Get a unique file name inside a folder, adding numbers to the file name if needed.
+     *
+     * @module mm.core
+     * @ngdoc method
+     * @name $mmFS#getUniqueNameInFolder
+     * @param  {String} dirPath      Path to the destination folder.
+     * @param  {String} fileName     File name that wants to be used.
+     * @param  {String} [defaultExt] Default extension to use if no extension found in the file.
+     * @return {Promise}             Promise resolved with the unique file name.
+     */
+    self.getUniqueNameInFolder = function(dirPath, fileName, defaultExt) {
+        // Get existing files in the folder.
+        return self.getDirectoryContents(dirPath).then(function(entries) {
+            var files = {},
+                fileNameWithoutExtension = self.removeExtension(fileName),
+                extension = self.getFileExtension(fileName) || defaultExt,
+                newName,
+                number = 1;
+
+            // Clean the file name.
+            fileNameWithoutExtension = $mmText.removeSpecialCharactersForFiles(decodeURIComponent(fileNameWithoutExtension));
+
+            // Index the files by name.
+            angular.forEach(entries, function(entry) {
+                files[entry.name] = entry;
+            });
+
+            // Format extension.
+            if (extension) {
+                extension = '.' + extension;
+            } else {
+                extension = '';
+            }
+
+            newName = fileNameWithoutExtension + extension;
+            if (typeof files[newName] == 'undefined') {
+                // No file with the same name.
+                return newName;
+            } else {
+                // Repeated name. Add a number until we find a free name.
+                do {
+                    newName = fileNameWithoutExtension + '(' + number + ')' + extension;
+                    number++;
+                } while (typeof files[newName] != 'undefined');
+
+                // Ask the user what he wants to do.
+                return newName;
+            }
+        }).catch(function() {
+            // Folder doesn't exist, name is unique. Clean it and return it.
+            return $mmText.removeSpecialCharactersForFiles(decodeURIComponent(fileName));
+        });
+    };
+
+    /**
+     * Remove app temporary folder.
+     *
+     * @module mm.core
+     * @ngdoc method
+     * @name $mmFS#clearTmpFolder
+     * @return {Promise} Promise resolved when done.
+     */
+    self.clearTmpFolder = function() {
+        return self.removeDir(mmFsTmpFolder);
     };
 
     return self;

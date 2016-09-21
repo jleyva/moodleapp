@@ -21,7 +21,7 @@ angular.module('mm.addons.mod_folder')
  * @ngdoc service
  * @name $mmaModFolderPrefetchHandler
  */
-.factory('$mmaModFolderPrefetchHandler', function($mmaModFolder, $mmSite, mmaModFolderComponent) {
+.factory('$mmaModFolderPrefetchHandler', function($mmaModFolder, $q, $mmSite, $mmFilepool, mmaModFolderComponent) {
 
     var self = {};
 
@@ -33,8 +33,8 @@ angular.module('mm.addons.mod_folder')
      * @module mm.addons.mod_folder
      * @ngdoc method
      * @name $mmaModFolderPrefetchHandler#getDownloadSize
-     * @param {Object} module Module to get the size.
-     * @return {Number}       Size.
+     * @param  {Object} module Module to get the size.
+     * @return {Object}        With the file size and a boolean to indicate if it is the total size or only partial.
      */
     self.getDownloadSize = function(module) {
         var size = 0;
@@ -43,7 +43,35 @@ angular.module('mm.addons.mod_folder')
                 size = size + content.filesize;
             }
         });
-        return size;
+        return {size: size, total: true};
+    };
+
+    /**
+     * Get the downloaded size of a module.
+     *
+     * @module mm.addons.mod_folder
+     * @ngdoc method
+     * @name $mmaModFolderPrefetchHandler#getDownloadedSize
+     * @param {Object} module   Module to get the downloaded size.
+     * @param {Number} courseId Course ID the module belongs to.
+     * @return {Promise}        Promise resolved with the size.
+     */
+    self.getDownloadedSize = function(module, courseId) {
+        return $mmFilepool.getFilesSizeByComponent($mmSite.getId(), self.component, module.id);
+    };
+
+    /**
+     * Check if a folder is downloadable.
+     *
+     * @module mm.addons.mod_folder
+     * @ngdoc method
+     * @name $mmaModFolderPrefetchHandler#isDownloadable
+     * @param {Object} module    Module to check.
+     * @param {Number} courseId  Course ID the module belongs to.
+     * @return {Promise}         Promise resolved with true if downloadable, resolved with false otherwise.
+     */
+    self.isDownloadable = function(module, courseId) {
+        return $q.when(module.contents.length > 0);
     };
 
     /**
@@ -71,6 +99,20 @@ angular.module('mm.addons.mod_folder')
      */
     self.prefetch = function(module, courseId, single) {
         return $mmaModFolder.prefetchContent(module);
+    };
+
+    /**
+     * Remove module downloaded files.
+     *
+     * @module mm.addons.mod_book
+     * @ngdoc method
+     * @name $mmaModFolderPrefetchHandler#removeFiles
+     * @param {Object} module   Module to remove the files.
+     * @param {Number} courseId Course ID the module belongs to.
+     * @return {Promise}        Promise resolved when done.
+     */
+    self.removeFiles = function(module, courseId) {
+        return $mmFilepool.removeFilesByComponent($mmSite.getId(), self.component, module.id);
     };
 
     return self;

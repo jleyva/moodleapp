@@ -31,16 +31,25 @@ angular.module('mm.addons.mod_forum')
         scrollView;
 
     $scope.component = mmaModForumComponent;
+    $scope.componentId = cmid;
     $scope.courseid = courseid;
+    $scope.refreshPostsIcon = 'spinner';
     $scope.newpost = {
         replyingto: undefined,
         subject: '',
-        message: ''
+        text: ''
+    };
+    $scope.sort = {
+        icon: 'ion-arrow-up-c',
+        direction: 'DESC',
+        text: $translate.instant('mma.mod_forum.sortnewestfirst')
     };
 
     // Convenience function to get forum discussions.
     function fetchPosts() {
         return $mmaModForum.getDiscussionPosts(discussionid).then(function(posts) {
+            posts = $mmaModForum.sortDiscussionPosts(posts, $scope.sort.direction);
+
             $scope.discussion = $mmaModForum.extractStartingPost(posts);
             $scope.posts = posts;
 
@@ -52,14 +61,42 @@ angular.module('mm.addons.mod_forum')
         }, function(message) {
             $mmUtil.showErrorModal(message);
             return $q.reject();
+        }).finally(function() {
+            $scope.discussionLoaded = true;
+            $scope.refreshPostsIcon = 'ion-refresh';
         });
     }
 
+    // Function to change posts sorting.
+    $scope.changeSort = function(init) {
+        $scope.discussionLoaded = false;
+
+        if (!init) {
+            $scope.sort.direction = $scope.sort.direction == 'DESC' ? 'ASC' : 'DESC';
+        } else {
+            $scope.sort.direction = 'DESC';
+        }
+
+        return fetchPosts().then(function() {
+            if ($scope.sort.direction == 'DESC') {
+                $scope.sort.icon = 'ion-arrow-up-c';
+                $scope.sort.text = $translate.instant('mma.mod_forum.sortnewestfirst');
+            } else {
+                $scope.sort.icon = 'ion-arrow-down-c';
+                $scope.sort.text = $translate.instant('mma.mod_forum.sortoldestfirst');
+            }
+        });
+    };
+
     // Refresh posts.
     function refreshPosts() {
-        return $mmaModForum.invalidateDiscussionPosts(discussionid).finally(function() {
-            return fetchPosts();
-        });
+        if ($scope.discussionLoaded) {
+            $scope.discussionLoaded = false;
+            $scope.refreshPostsIcon = 'spinner';
+            return $mmaModForum.invalidateDiscussionPosts(discussionid).finally(function() {
+                return fetchPosts();
+            });
+        }
     }
 
     // Trigger an event to notify a new reply.
@@ -72,18 +109,16 @@ angular.module('mm.addons.mod_forum')
         $mmEvents.trigger(mmaModForumReplyDiscussionEvent, data);
     }
 
-    fetchPosts().then(function() {
+    $scope.changeSort(true).then(function() {
         // Add log in Moodle.
         $mmSite.write('mod_forum_view_forum_discussion', {
             discussionid: discussionid
         });
-    }).finally(function() {
-        $scope.discussionLoaded = true;
     });
 
     // Pull to refresh.
     $scope.refreshPosts = function() {
-        refreshPosts().finally(function() {
+        return refreshPosts().finally(function() {
             $scope.$broadcast('scroll.refreshComplete');
         });
     };
@@ -97,7 +132,7 @@ angular.module('mm.addons.mod_forum')
 
         $scope.newpost.replyingto = undefined;
         $scope.newpost.subject = $scope.defaultSubject;
-        $scope.newpost.message = '';
+        $scope.newpost.text = '';
 
         notifyNewReply();
 

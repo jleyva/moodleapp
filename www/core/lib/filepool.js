@@ -802,10 +802,11 @@ angular.module('mm.core')
      */
     self._downloadForPoolByUrl = function(siteId, fileUrl, revision, timemodified, filePath, poolFileObject) {
         var fileId = self._getFileIdByUrl(fileUrl),
+            extension = $mmFS.guessExtensionFromUrl(fileUrl),
             addExtension = typeof filePath == "undefined",
-            pathPromise = filePath ? $q.when(filePath) : self._getFilePath(siteId, fileId);
+            pathPromise = filePath ? filePath : self._getFilePath(siteId, fileId, extension);
 
-        return pathPromise.then(function(filePath) {
+        return $q.when(pathPromise).then(function(filePath) {
             if (poolFileObject && poolFileObject.fileId !== fileId) {
                 $log.error('Invalid object to update passed');
                 return $q.reject();
@@ -1069,6 +1070,29 @@ angular.module('mm.core')
     };
 
     /**
+     * Get a package revision.
+     *
+     * @module mm.core
+     * @ngdoc method
+     * @name $mmFilepool#getPackageRevision
+     * @param {String} siteId       Site ID.
+     * @param {String} component    Package's component.
+     * @param {Mixed} [componentId] An ID to use in conjunction with the component.
+     * @return {Promise}            Promise resolved with the revision.
+     */
+    self.getPackageRevision = function(siteId, component, componentId) {
+        return $mmSitesManager.getSite(siteId).then(function(site) {
+            var db = site.getDb(),
+                packageId = self.getPackageId(component, componentId);
+
+            // Get status.
+            return db.get(mmFilepoolPackagesStore, packageId).then(function(entry) {
+                return entry.revision;
+            });
+        });
+    };
+
+    /**
      * Get a package timemodified.
      *
      * @module mm.core
@@ -1273,7 +1297,7 @@ angular.module('mm.core')
             // web intents. The easiest way to provide such information is to keep the extension
             // in the file ID. Developers should not care about it, but as we are using the
             // file ID in the file path, devs and system can guess it.
-            candidate = $mmText.guessExtensionFromUrl(url);
+            candidate = $mmFS.guessExtensionFromUrl(url);
             if (candidate && candidate !== 'php') {
                 extension = '.' + candidate;
             }
@@ -1473,6 +1497,82 @@ angular.module('mm.core')
         return self._fixPluginfileURL(siteId, fileUrl).then(function(fileUrl) {
             var fileId = self._getFileIdByUrl(fileUrl);
             return self._getFilePath(siteId, fileId);
+        });
+    };
+
+    /**
+     * Get all the matching files from a component. Returns objects containing properties like path, extension and url.
+     *
+     * @module mm.core
+     * @ngdoc method
+     * @name $mmFilepool#getFilesByComponent
+     * @param {String} siteId       The site ID.
+     * @param {String} component    The component to get.
+     * @param {Mixed} [componentId] An ID to use in conjunction with the component.
+     * @return {Promise}            Promise resolved with the files on success.
+     */
+    self.getFilesByComponent = function(siteId, component, componentId) {
+        var where;
+        if (typeof componentId !== 'undefined') {
+            where = ['componentAndId', '=', [component, self._fixComponentId(componentId)]];
+        } else {
+            where = ['component', '=', component];
+        }
+
+        return getSiteDb(siteId).then(function(db) {
+            return db.query(mmFilepoolLinksStore, where).then(function(items) {
+                var promises = [],
+                    files = [];
+
+                angular.forEach(items, function(item) {
+                    promises.push(db.get(mmFilepoolStore, item.fileId).then(function(fileEntry) {
+                        if (!fileEntry) {
+                            return;
+                        }
+                        files.push({
+                            url: fileEntry.url,
+                            path: fileEntry.path,
+                            extension: fileEntry.extension,
+                            revision: fileEntry.revision,
+                            timemodified: fileEntry.timemodified
+                        });
+                    }));
+                });
+
+                return $q.all(promises).then(function() {
+                    return files;
+                });
+            });
+        });
+    };
+
+    /**
+     * Get the size of all the files from a component.
+     *
+     * @module mm.core
+     * @ngdoc method
+     * @name $mmFilepool#getFilesSizeByComponent
+     * @param {String} siteId       The site ID.
+     * @param {String} component    The component to get.
+     * @param {Mixed} [componentId] An ID to use in conjunction with the component.
+     * @return {Promise}            Promise resolved with the size on success.
+     */
+    self.getFilesSizeByComponent = function(siteId, component, componentId) {
+        return self.getFilesByComponent(siteId, component, componentId).then(function(files) {
+            var promises = [],
+                size = 0;
+
+            angular.forEach(files, function(file) {
+                promises.push($mmFS.getFileSize(file.path).then(function(fs) {
+                    size += fs;
+                }).catch(function() {
+                    // Ignore failures, maybe some file was deleted.
+                }));
+            });
+
+            return $q.all(promises).then(function() {
+                return size;
+            });
         });
     };
 
@@ -1779,10 +1879,7 @@ angular.module('mm.core')
         }
 
         // Remove the extension from the filename.
-        var position = filename.lastIndexOf('.');
-        if (position != -1) {
-            filename = filename.substr(0, position);
-        }
+        filename = $mmFS.removeExtension(filename);
 
         return $mmText.removeSpecialCharactersForFiles(filename);
     };
@@ -2190,21 +2287,33 @@ angular.module('mm.core')
      */
     self._removeFileById = function(siteId, fileId) {
         return getSiteDb(siteId).then(function(db) {
-            var p1, p2, p3;
-            p1 = db.remove(mmFilepoolStore, fileId);
-            p2 = db.where(mmFilepoolLinksStore, 'fileId', '=', fileId).then(function(entries) {
-                return $q.all(entries.map(function(entry) {
-                    return db.remove(mmFilepoolLinksStore, [entry.fileId, entry.component, entry.componentId]);
+            // Get the path to the file first since it relies on the file object stored in the pool.
+            return self._getFilePath(siteId, fileId).then(function(path) {
+                var promises = [];
+
+                // Remove entry from filepool store.
+                promises.push(db.remove(mmFilepoolStore, fileId));
+
+                // Remove links.
+                promises.push(db.where(mmFilepoolLinksStore, 'fileId', '=', fileId).then(function(entries) {
+                    return $q.all(entries.map(function(entry) {
+                        return db.remove(mmFilepoolLinksStore, [entry.fileId, entry.component, entry.componentId]);
+                    }));
                 }));
+
+                // Remove the file.
+                if ($mmFS.isAvailable()) {
+                    promises.push($mmFS.removeFile(path).catch(function(error) {
+                        if (error && error.code == 1) {
+                            // Not found, ignore error since maybe it was deleted already.
+                        } else {
+                            return $q.reject(error);
+                        }
+                    }));
+                }
+
+                return $q.all(promises);
             });
-            if ($mmFS.isAvailable()) {
-                p3 = self._getFilePath(siteId, fileId).then(function(path) {
-                    return $mmFS.removeFile(path);
-                });
-            } else {
-                p3 = $q.when();
-            }
-            return $q.all([p1, p2, p3]);
         });
     };
 

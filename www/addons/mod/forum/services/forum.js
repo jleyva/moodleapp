@@ -21,7 +21,8 @@ angular.module('mm.addons.mod_forum')
  * @ngdoc controller
  * @name $mmaModForum
  */
-.factory('$mmaModForum', function($q, $mmSite, $mmUser, $mmGroups, $translate, $mmSitesManager, mmaModForumDiscPerPage) {
+.factory('$mmaModForum', function($q, $mmSite, $mmUser, $mmGroups, $translate, $mmSitesManager, mmaModForumDiscPerPage,
+            mmaModForumComponent) {
     var self = {};
 
     /**
@@ -173,7 +174,7 @@ angular.module('mm.addons.mod_forum')
         // Last post wasn't the starting one. Let's search all the posts until we find the first one.
         for (var i = 0; i < posts.length; i++) {
             if (posts[i].parent == 0) {
-                array.splice(i, 1); // Remove it from the array.
+                posts.splice(i, 1); // Remove it from the array.
                 return posts[i];
             }
         }
@@ -307,16 +308,35 @@ angular.module('mm.addons.mod_forum')
     };
 
     /**
+     * Sort forum discussion posts by an specified field.
+     * @param  {Array}  posts     Discussion posts to be sorted.
+     * @param  {String} direction Direction of the sorting (ASC / DESC).
+     * @return {Array}            Discussion posts sorted.
+     */
+    self.sortDiscussionPosts = function(posts, direction) {
+        return posts.sort(function (a, b) {
+            a = parseInt(a.created, 10);
+            b = parseInt(b.created, 10);
+            if (direction == 'ASC') {
+                return a >= b ? 1 : -1;
+            } else {
+                return a <= b ? 1 : -1;
+            }
+        });
+    };
+
+    /**
      * Get forum discussions.
      *
      * @module mm.addons.mod_forum
      * @ngdoc method
      * @name $mmaModForum#getDiscussions
-     * @param {Number} forumid Forum ID.
-     * @param {Number} page    Page.
-     * @return {Promise}       Promise resolved with forum discussions.
+     * @param {Number} forumid     Forum ID.
+     * @param {Number} page        Page.
+     * @param {Boolean} forceCache True to always get the value from cache, false otherwise.
+     * @return {Promise}           Promise resolved with forum discussions.
      */
-    self.getDiscussions = function(forumid, page) {
+    self.getDiscussions = function(forumid, page, forceCache) {
         page = page || 0;
 
         var params = {
@@ -330,6 +350,10 @@ angular.module('mm.addons.mod_forum')
                 cacheKey: getDiscussionsListCacheKey(forumid)
             };
 
+        if (forceCache) {
+            preSets.omitExpires = true;
+        }
+
         return $mmSite.read('mod_forum_get_forum_discussions_paginated', params, preSets).then(function(response) {
             if (response) {
                 var canLoadMore = response.discussions.length >= mmaModForumDiscPerPage;
@@ -339,6 +363,59 @@ angular.module('mm.addons.mod_forum')
                 return $q.reject();
             }
         });
+    };
+
+    /**
+     * Get forum discussions in several pages.
+     * If a page fails, the discussions until that page will be returned along with a flag indicating an error occurred.
+     *
+     * @module mm.addons.mod_forum
+     * @ngdoc method
+     * @name $mmaModForum#getDiscussionsInPages
+     * @param  {Number} forumId     Forum ID.
+     * @param  {Boolean} forceCache True to always get the value from cache, false otherwise.
+     * @param  {Number} [numPages]  Number of pages to get. If not defined, all pages.
+     * @param  {Number} [startPage] Page to start. If not defined, first page.
+     * @return {Promise}            Promise resolved with an object with:
+     *                                - discussions: List of discussions.
+     *                                - error: True if an error occurred, false otherwise.
+     */
+    self.getDiscussionsInPages = function(forumId, forceCache, numPages, startPage) {
+        if (typeof numPages == 'undefined') {
+            numPages = -1;
+        }
+
+        startPage = startPage || 0;
+        numPages = parseInt(numPages, 10);
+
+        var result = {
+            discussions: [],
+            error: false
+        };
+
+        if (!numPages) {
+            return result;
+        }
+
+        return getPage(startPage);
+
+        function getPage(page) {
+            // Get page discussions.
+            return self.getDiscussions(forumId, page, forceCache).then(function(response) {
+                result.discussions = result.discussions.concat(response.discussions);
+                numPages--;
+
+                if (response.canLoadMore && numPages !== 0) {
+                    return getPage(page + 1); // Get next page.
+                } else {
+                    return result;
+                }
+            }).catch(function() {
+                // Error getting a page.
+                result.error = true;
+                return result;
+            });
+        }
     };
 
     /**
@@ -352,6 +429,38 @@ angular.module('mm.addons.mod_forum')
      */
     self.invalidateCanAddDiscussion = function(forumid) {
         return $mmSite.invalidateWsCacheForKeyStartingWith(getCommonCanAddDiscussionCacheKey(forumid));
+    };
+
+    /**
+     * Invalidate the prefetched content except files.
+     * To invalidate files, use $mmaModForum#invalidateFiles.
+     *
+     * @module mm.addons.mod_forum
+     * @ngdoc method
+     * @name $mmaModForum#invalidateContent
+     * @param {Object} moduleId The module ID.
+     * @param {Number} courseId Course ID.
+     * @return {Promise}        Promise resolved when data is invalidated.
+     */
+    self.invalidateContent = function(moduleId, courseId) {
+        // Get the forum first, we need the forum ID.
+        return self.getForum(courseId, moduleId).then(function(forum) {
+            // We need to get the list of discussions to be able to invalidate their posts.
+            return self.getDiscussionsInPages(forum.id, true).then(function(response) {
+                // Now invalidate the WS calls.
+                var promises = [];
+
+                promises.push(self.invalidateForumData(courseId));
+                promises.push(self.invalidateDiscussionsList(forum.id));
+                promises.push(self.invalidateCanAddDiscussion(forum.id));
+
+                angular.forEach(response.discussions, function(discussion) {
+                    promises.push(self.invalidateDiscussionPosts(discussion.discussion));
+                });
+
+                return $q.all(promises);
+            });
+        });
     };
 
     /**
@@ -378,6 +487,19 @@ angular.module('mm.addons.mod_forum')
      */
     self.invalidateDiscussionsList = function(forumid) {
         return $mmSite.invalidateWsCacheForKey(getDiscussionsListCacheKey(forumid));
+    };
+
+    /**
+     * Invalidate the prefetched files.
+     *
+     * @module mm.addons.mod_forum
+     * @ngdoc method
+     * @name $mmaModForum#invalidateFiles
+     * @param {Object} moduleId The module ID.
+     * @return {Promise}        Promise resolved when the files are invalidated.
+     */
+    self.invalidateFiles = function(moduleId) {
+        return $mmFilepool.invalidateFilesByComponent($mmSite.getId(), mmaModForumComponent, moduleId);
     };
 
     /**

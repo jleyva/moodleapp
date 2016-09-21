@@ -23,7 +23,7 @@ angular.module('mm.addons.mod_forum')
  */
 .controller('mmaModForumDiscussionsCtrl', function($q, $scope, $stateParams, $mmaModForum, $mmCourse, $mmUtil, $mmGroups,
             $mmEvents, $ionicScrollDelegate, $ionicPlatform, mmUserProfileState, mmaModForumNewDiscussionEvent,
-            mmaModForumReplyDiscussionEvent, $mmText, $translate) {
+            mmaModForumReplyDiscussionEvent, $mmText, $translate, mmaModForumComponent) {
     var module = $stateParams.module || {},
         courseid = $stateParams.courseid,
         forum,
@@ -40,6 +40,9 @@ angular.module('mm.addons.mod_forum')
     $scope.courseid = courseid;
     $scope.userStateName = mmUserProfileState;
     $scope.isCreateEnabled = $mmaModForum.isCreateDiscussionEnabled();
+    $scope.refreshIcon = 'spinner';
+    $scope.component = mmaModForumComponent;
+    $scope.componentId = module.id;
 
     // Convenience function to get forum data and discussions.
     function fetchForumDataAndDiscussions(refresh) {
@@ -90,21 +93,11 @@ angular.module('mm.addons.mod_forum')
                 $scope.count = $scope.discussions.length;
                 $scope.canLoadMore = response.canLoadMore;
                 page++;
-
-                preFetchDiscussionsPosts(discussions);
             });
         }, function(message) {
             $mmUtil.showErrorModal(message);
             $scope.canLoadMore = false; // Set to false to prevent infinite calls with infinite-loading.
             return $q.reject();
-        });
-    }
-
-    // Convenience function to prefetch the posts of each discussion, so they're available in offline mode.
-    function preFetchDiscussionsPosts(discussions) {
-        angular.forEach(discussions, function(discussion) {
-            var discussionid = discussion.discussion;
-            $mmaModForum.getDiscussionPosts(discussionid);
         });
     }
 
@@ -131,7 +124,9 @@ angular.module('mm.addons.mod_forum')
                 shouldScrollTop = true;
             }
             $scope.discussionsLoaded = false;
+            $scope.refreshIcon = 'spinner';
             refreshData().finally(function() {
+                $scope.refreshIcon = 'ion-refresh';
                 $scope.discussionsLoaded = true;
             });
             // Check completion since it could be configured to complete once the user adds a new discussion or replies.
@@ -144,6 +139,7 @@ angular.module('mm.addons.mod_forum')
             $mmCourse.checkModuleCompletion(courseid, module.completionstatus);
         });
     }).finally(function() {
+        $scope.refreshIcon = 'ion-refresh';
         $scope.discussionsLoaded = true;
     });
 
@@ -156,14 +152,20 @@ angular.module('mm.addons.mod_forum')
 
     // Pull to refresh.
     $scope.refreshDiscussions = function() {
-        refreshData().finally(function() {
-            $scope.$broadcast('scroll.refreshComplete');
-        });
+        if ($scope.discussionsLoaded) {
+            $scope.discussionsLoaded = false;
+            $scope.refreshIcon = 'spinner';
+            return refreshData().finally(function() {
+                $scope.discussionsLoaded = true;
+                $scope.refreshIcon = 'ion-refresh';
+                $scope.$broadcast('scroll.refreshComplete');
+            });
+        }
     };
 
     // Context Menu Description action.
     $scope.expandDescription = function() {
-        $mmText.expandText($translate.instant('mm.core.description'), $scope.description);
+        $mmText.expandText($translate.instant('mm.core.description'), $scope.description, false, mmaModForumComponent, module.id);
     };
 
     // Listen for discussions added. When a discussion is added, we reload the data.

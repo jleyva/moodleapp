@@ -114,7 +114,7 @@ angular.module('mm.addons.mod_quiz')
                 newAttempt = $mmaModQuiz.isAttemptFinished(attempt.state);
 
                 // Load quiz last sync time. We set it to the attempt so it's accessible in access rules handlers.
-                promises.push($mmaModQuizSync.getQuizSyncTime(quiz.id).then(function(time) {
+                promises.push($mmaModQuizSync.getSyncTime(quiz.id).then(function(time) {
                     attempt.quizSyncTime = time;
                     quiz.syncTimeReadable = $mmaModQuizHelper.getReadableTimeFromTimestamp(time);
                 }));
@@ -199,7 +199,7 @@ angular.module('mm.addons.mod_quiz')
             });
 
             // Mark the page as viewed. We'll ignore errors in this call.
-            $mmaModQuiz.logViewAttempt(attempt.id, page, offline);
+            $mmaModQuiz.logViewAttempt(attempt.id, page, $scope.preflightData, offline);
 
             // Start looking for changes.
             $mmaModQuizAutoSave.startCheckChangesProcess($scope, quiz, attempt);
@@ -219,7 +219,7 @@ angular.module('mm.addons.mod_quiz')
             attempt.dueDateWarning = $mmaModQuiz.getAttemptDueDateWarning(quiz, attempt);
 
             // Log summary as viewed.
-            $mmaModQuiz.logViewAttemptSummary(attempt.id);
+            $mmaModQuiz.logViewAttemptSummary(attempt.id, $scope.preflightData);
         }).catch(function(message) {
             $scope.showSummary = false;
             return $mmaModQuizHelper.showError(message, 'mma.mod_quiz.errorgetquestions');

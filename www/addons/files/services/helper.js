@@ -14,7 +14,7 @@
 
 angular.module('mm.addons.files')
 
-.factory('$mmaFilesHelper', function($q, $mmUtil, $log, $mmaFiles, $mmFileUploaderHelper) {
+.factory('$mmaFilesHelper', function($q, $mmUtil, $log, $mmaFiles, $mmFileUploaderHelper, $mmSite) {
 
     $log = $log.getInstance('$mmaFilesHelper');
 
@@ -30,25 +30,47 @@ angular.module('mm.addons.files')
      */
     self.selectAndUploadFile = function() {
         // Open the file picker.
-        return $mmFileUploaderHelper.selectAndUploadFile().then(function(result) {
-            // File uploaded. Move it to private files if needed.
-            if ($mmaFiles.canMoveFromDraftToPrivate()) {
-                if (!result) {
-                    return $q.reject();
-                }
+        var maxSize = $mmSite.getInfo().usermaxuploadfilesize,
+            userQuota = $mmSite.getInfo().userquota;
 
-                var modal = $mmUtil.showModalLoading('mm.fileuploader.uploading', true);
-                return $mmaFiles.moveFromDraftToPrivate(result.itemid).catch(function(error) {
-                    if (error) {
-                        $mmUtil.showErrorModal(error);
-                    } else {
-                        $mmUtil.showErrorModal('mm.fileuploader.errorwhileuploading', true);
-                    }
-                    return $q.reject();
-                }).finally(function() {
-                    modal.dismiss();
-                });
+        if (userQuota === 0) {
+            // 0 means ignore user quota. In the app it is -1.
+            userQuota = -1;
+        }
+
+        if (typeof maxSize == 'undefined') {
+            if (typeof userQuota != 'undefined') {
+                maxSize = userQuota;
+            } else {
+                // In versions pre Moodle 2.9 this field is not present, so we force to ignore the file size.
+                maxSize = -1;
             }
+        } else if (typeof userQuota != 'undefined') {
+            // Use the minimum value.
+            maxSize = Math.min(maxSize, userQuota);
+        }
+
+        return $mmFileUploaderHelper.selectAndUploadFile(maxSize).then(function(result) {
+            // File uploaded. Move it to private files if needed.
+            return $mmaFiles.shouldMoveFromDraftToPrivate().then(function(move) {
+                if (move) {
+                    if (!result) {
+                        return $q.reject();
+                    }
+
+                    var modal = $mmUtil.showModalLoading('mm.fileuploader.uploading', true);
+                    return $mmaFiles.moveFromDraftToPrivate(result.itemid).catch(function(error) {
+                        if (error) {
+                            $mmUtil.showErrorModal(error);
+                        } else {
+                            $mmUtil.showErrorModal('mm.fileuploader.errorwhileuploading', true);
+                        }
+                        return $q.reject();
+                    }).finally(function() {
+                        modal.dismiss();
+                    });
+                }
+            });
         }).then(function() {
             $mmUtil.showModal('mm.core.success', 'mm.fileuploader.fileuploaded');
         });
